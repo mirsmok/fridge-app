@@ -1,146 +1,215 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
-
-const SCANNER_ID = 'qr-reader';
 
 export default function Scanner({ onScan, onClose }) {
-  const scannerRef = useRef(null);
-  const [cameras, setCameras] = useState([]);
-  const [activeCamIdx, setActiveCamIdx] = useState(null);
-  const [status, setStatus] = useState('loading'); // loading | running | error
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const detectorRef = useRef(null);
+  const activeRef = useRef(false);
+  const lastConstraintRef = useRef(null);
+  const stallCheckRef = useRef(null);
+  const lastTimeRef = useRef(0);
+  const stallCountRef = useRef(0);
+  const [status, setStatus] = useState('loading');
+  const [statusMsg, setStatusMsg] = useState('Uruchamianie…');
   const [errorMsg, setErrorMsg] = useState('');
-
-  const stopScanner = async () => {
-    const s = scannerRef.current;
-    if (s && s.isScanning) {
-      try { await s.stop(); } catch {}
-    }
-  };
-
-  const startCamera = useCallback(async (camIdx, camList) => {
-    const list = camList ?? cameras;
-    if (!list.length) return;
-    const cam = list[camIdx ?? activeCamIdx ?? 0];
-
-    await stopScanner();
-
-    const scanner = scannerRef.current;
-    setStatus('loading');
-    setErrorMsg('');
-
-    try {
-      await scanner.start(
-        cam.id,
-        { fps: 10, qrbox: { width: 260, height: 130 }, aspectRatio: 1.5 },
-        (text) => {
-          stopScanner();
-          onScan(text);
-        },
-        () => {}
-      );
-      setActiveCamIdx(camIdx ?? 0);
-      setStatus('running');
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes('NotReadableError') || msg.includes('Could not start')) {
-        setErrorMsg('Kamera zajęta przez inną aplikację. Spróbuj zamknąć inne aplikacje lub wybrać inną kamerę.');
-      } else if (msg.includes('NotAllowedError')) {
-        setErrorMsg('Brak uprawnień do kamery. Zezwól na dostęp w ustawieniach przeglądarki.');
-      } else {
-        setErrorMsg(`Błąd: ${msg}`);
-      }
-      setStatus('error');
-    }
-  }, [cameras, activeCamIdx, onScan]);
+  const [restartCount, setRestartCount] = useState(0);
+  const [cameras, setCameras] = useState([]);
+  const [hasFully, setHasFully] = useState(false);
 
   useEffect(() => {
-    const scanner = new Html5Qrcode(SCANNER_ID);
-    scannerRef.current = scanner;
-
-    Html5Qrcode.getCameras()
-      .then(list => {
-        if (!list.length) { setErrorMsg('Nie znaleziono kamer.'); setStatus('error'); return; }
-        setCameras(list);
-        // domyślnie tylna kamera
-        const backIdx = list.findIndex(c =>
-          c.label.toLowerCase().includes('back') ||
-          c.label.toLowerCase().includes('rear') ||
-          c.label.toLowerCase().includes('environment') ||
-          c.label.toLowerCase().includes('tył')
-        );
-        const idx = backIdx >= 0 ? backIdx : list.length > 1 ? 1 : 0;
-        startCamera(idx, list);
-      })
-      .catch(e => {
-        setErrorMsg(`Nie można uzyskać listy kamer: ${e}`);
-        setStatus('error');
-      });
-
-    return () => { stopScanner(); };
+    setHasFully(typeof window.fully === 'object' && typeof window.fully.scanQrCode === 'function');
   }, []);
 
-  const switchCamera = (idx) => {
-    if (idx === activeCamIdx) return;
-    startCamera(idx, cameras);
-  };
+  const scanWithFully = useCallback(() => {
+    if (!window.fully) return;
+    // FK Browser Plus: fully.scanQrCode(prompt, jsCallback) — wywoła globalny callback
+    window.__onFullyBarcode = (code) => {
+      if (code) onScan(code);
+    };
+    try {
+      window.fully.scanQrCode('Skanuj kod kreskowy', '__onFullyBarcode');
+    } catch (e) {
+      setErrorMsg(`FK Browser native scanner error: ${e}`);
+    }
+  }, [onScan]);
 
-  const isFront = (cam) =>
-    cam.label.toLowerCase().includes('front') ||
-    cam.label.toLowerCase().includes('user') ||
-    cam.label.toLowerCase().includes('przód');
+  const stopCamera = useCallback(() => {
+    activeRef.current = false;
+    cancelAnimationFrame(rafRef.current);
+    clearInterval(stallCheckRef.current);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  const scanLoop = useCallback(() => {
+    if (!activeRef.current) return;
+    const video = videoRef.current;
+    const detector = detectorRef.current;
+    if (!video || !detector || video.readyState < 2) {
+      rafRef.current = requestAnimationFrame(scanLoop);
+      return;
+    }
+    detector.detect(video)
+      .then(barcodes => {
+        if (!activeRef.current) return;
+        if (barcodes.length > 0) {
+          stopCamera();
+          onScan(barcodes[0].rawValue);
+        } else {
+          rafRef.current = requestAnimationFrame(scanLoop);
+        }
+      })
+      .catch(() => { rafRef.current = requestAnimationFrame(scanLoop); });
+  }, [onScan, stopCamera]);
+
+  const startCamera = useCallback(async (constraint) => {
+    stopCamera();
+    setStatus('loading');
+    setErrorMsg('');
+    setStatusMsg('Uruchamianie kamery…');
+
+    if (!('BarcodeDetector' in window)) {
+      setErrorMsg('BarcodeDetector niedostępny w tej wersji FK Browser / Android WebView. Zaktualizuj system WebView.');
+      setStatus('error');
+      return;
+    }
+
+    try {
+      detectorRef.current = new BarcodeDetector({
+        formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'],
+      });
+    } catch (e) {
+      setErrorMsg(`BarcodeDetector init error: ${e}`);
+      setStatus('error');
+      return;
+    }
+
+    try {
+      lastConstraintRef.current = constraint;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: constraint });
+      streamRef.current = stream;
+      activeRef.current = true;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setStatus('running');
+      lastTimeRef.current = 0;
+      stallCountRef.current = 0;
+      rafRef.current = requestAnimationFrame(scanLoop);
+
+      // Po pierwszym getUserMedia enumerateDevices zwraca prawdziwe labels
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videos = devices.filter(d => d.kind === 'videoinput');
+        setCameras(videos);
+      } catch {}
+
+      // Detekcja zawieszenia strumienia (Motion Detection FK Browser może przerywać)
+      stallCheckRef.current = setInterval(() => {
+        if (!activeRef.current || !videoRef.current) return;
+        const t = videoRef.current.currentTime;
+        if (t === lastTimeRef.current) {
+          stallCountRef.current += 1;
+          if (stallCountRef.current >= 3) {
+            // 3 × 1s = 3s bez nowej klatki — restart
+            clearInterval(stallCheckRef.current);
+            setStatusMsg('Strumień zawieszony — restart…');
+            setRestartCount(c => c + 1);
+            startCamera(lastConstraintRef.current);
+          }
+        } else {
+          stallCountRef.current = 0;
+          lastTimeRef.current = t;
+        }
+      }, 1000);
+    } catch (e) {
+      setErrorMsg(String(e));
+      setStatus('error');
+    }
+  }, [stopCamera, scanLoop]);
+
+  useEffect(() => {
+    // FK Browser + Legacy Camera: sekwencja "warmup" — przednia, potem tylna
+    // Bez tego pierwsza próba tylnej kamery nie działa, bo Motion Detection trzyma lock
+    const init = async () => {
+      setStatusMsg('Inicjalizacja kamery (warmup)…');
+      await startCamera({ facingMode: 'user' });
+      await new Promise(r => setTimeout(r, 800));
+      await startCamera({ facingMode: 'environment' });
+    };
+    init();
+    return () => stopCamera();
+  }, []);
 
   return (
     <div>
-      {/* Przełącznik aparatu */}
-      {cameras.length > 1 && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10, justifyContent: 'center' }}>
-          {cameras.map((cam, idx) => (
-            <button
-              key={cam.id}
-              className={`btn ${activeCamIdx === idx ? 'btn-primary' : 'btn-ghost'}`}
-              style={{ fontSize: '0.78rem', flex: 1 }}
-              onClick={() => switchCamera(idx)}
-            >
-              {isFront(cam) ? '🤳 Przedni' : `📷 ${cameras.length > 2 ? `Kamera ${idx + 1}` : 'Tylni'}`}
-            </button>
-          ))}
+      {hasFully && (
+        <div style={{
+          background: 'rgba(76,175,130,0.15)', border: '1px solid var(--ok)',
+          borderRadius: 8, padding: '8px 12px', marginBottom: 10
+        }}>
+          <div style={{ fontSize: '0.78rem', color: 'var(--ok)', marginBottom: 6 }}>
+            ✅ Wykryto FK Browser Plus — natywny skaner (nie konfliktuje z Motion Detection)
+          </div>
+          <button className="btn btn-ok" style={{ width: '100%', fontSize: '0.85rem' }} onClick={scanWithFully}>
+            📱 Skanuj natywnie (FK Browser)
+          </button>
         </div>
       )}
 
-      <div className="scanner-wrap" style={{ position: 'relative', minHeight: 180 }}>
-        <div id={SCANNER_ID} />
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+        <button className="btn btn-ghost" style={{ flex: 1, fontSize: '0.75rem', minWidth: 90 }}
+          onClick={() => startCamera({ facingMode: 'environment' })}>📷 Tylna</button>
+        <button className="btn btn-ghost" style={{ flex: 1, fontSize: '0.75rem', minWidth: 90 }}
+          onClick={() => startCamera({ facingMode: 'user' })}>🤳 Przednia</button>
+        {cameras.map((cam, idx) => (
+          <button key={cam.deviceId} className="btn btn-ghost"
+            style={{ flex: 1, fontSize: '0.7rem', minWidth: 90 }}
+            onClick={() => startCamera({ deviceId: { exact: cam.deviceId } })}>
+            #{idx}: {cam.label ? cam.label.slice(0, 14) : cam.deviceId.slice(0, 6)}
+          </button>
+        ))}
+      </div>
+
+      <div className="scanner-wrap" style={{ position: 'relative', minHeight: 200 }}>
+        <video ref={videoRef} playsInline muted style={{ width: '100%', display: 'block' }} />
         {status === 'loading' && (
           <div style={{
             position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', background: 'rgba(0,0,0,0.6)', borderRadius: 'var(--radius)'
+            justifyContent: 'center', background: 'rgba(0,0,0,0.75)', borderRadius: 'var(--radius)'
           }}>
-            <span style={{ color: '#fff', fontSize: '0.85rem' }}>⏳ Uruchamianie kamery…</span>
+            <span style={{ color: '#fff', fontSize: '0.85rem' }}>⏳ {statusMsg}</span>
           </div>
         )}
       </div>
 
       {status === 'error' && (
-        <div style={{ background: 'rgba(224,82,82,0.15)', border: '1px solid var(--danger)', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: '0.82rem', color: 'var(--danger)' }}>
+        <div style={{
+          background: 'rgba(224,82,82,0.15)', border: '1px solid var(--danger)',
+          borderRadius: 8, padding: '10px 12px', margin: '8px 0',
+          fontSize: '0.78rem', color: 'var(--danger)', wordBreak: 'break-all'
+        }}>
           ⚠️ {errorMsg}
-          {cameras.length > 1 && (
-            <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-              {cameras.map((cam, idx) => idx !== activeCamIdx && (
-                <button key={cam.id} className="btn btn-warn" style={{ fontSize: '0.75rem' }} onClick={() => switchCamera(idx)}>
-                  Spróbuj {isFront(cam) ? 'przedni' : `kamerę ${idx + 1}`}
-                </button>
-              ))}
-            </div>
-          )}
+          <div style={{ marginTop: 8 }}>
+            <button className="btn btn-warn" style={{ fontSize: '0.75rem' }}
+              onClick={() => startCamera({ facingMode: 'environment' })}>Spróbuj ponownie</button>
+          </div>
         </div>
       )}
 
       {status === 'running' && (
-        <p style={{ color: 'var(--ok)', fontSize: '0.8rem', marginBottom: 8, textAlign: 'center' }}>
-          📷 Skieruj kamerę na kod kreskowy
+        <p style={{ color: 'var(--ok)', fontSize: '0.8rem', margin: '8px 0', textAlign: 'center' }}>
+          📷 Skieruj kamerę na kod kreskowy{restartCount > 0 && ` (restarts: ${restartCount})`}
         </p>
       )}
 
-      <button className="btn btn-ghost" style={{ width: '100%' }} onClick={onClose}>Anuluj</button>
+      <button className="btn btn-ghost" style={{ width: '100%', marginTop: 8 }}
+        onClick={() => { stopCamera(); onClose(); }}>Anuluj</button>
     </div>
   );
 }

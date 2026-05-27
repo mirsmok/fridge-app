@@ -121,10 +121,11 @@ select.form-input option { background: var(--bg3); }
 /* Scanner */
 .scanner-wrap { border-radius: var(--radius); overflow: hidden; background: #000; margin-bottom: 12px; }
 .scanner-wrap #qr-reader { width: 100% !important; border: none !important; }
-.scanner-wrap #qr-reader video { width: 100% !important; }
+.scanner-wrap #qr-reader video { width: 100% !important; height: auto !important; display: block !important; }
+.scanner-wrap #qr-reader canvas { display: none !important; }
 .scanner-wrap #qr-reader__scan_region { background: transparent !important; }
-.scanner-wrap #qr-reader__dashboard { background: var(--bg2) !important; }
-.scanner-wrap #qr-reader__dashboard button { background: var(--accent) !important; border: none !important; color: #fff !important; padding: 8px 16px !important; border-radius: 8px !important; cursor: pointer !important; }
+.scanner-wrap #qr-reader__dashboard { display: none !important; }
+.scanner-wrap #qr-reader__header_message { display: none !important; }
 
 /* Shopping */
 .shopping-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; transition: opacity 0.2s; }

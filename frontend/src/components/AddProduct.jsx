@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import Scanner from './Scanner.jsx';
+import { useState, useEffect } from 'react';
 
 const UNITS = ['szt', 'g', 'kg', 'ml', 'l', 'op'];
 const LOCATIONS = ['lodówka', 'zamrażarka', 'spiżarnia'];
@@ -7,16 +6,48 @@ const LOCATIONS = ['lodówka', 'zamrażarka', 'spiżarnia'];
 const empty = { barcode: '', name: '', category: '', image_url: '', quantity: 1, unit: 'szt', expiry_date: '', location: 'lodówka', notes: '' };
 
 export default function AddProduct({ onAdded }) {
-  const [scanning, setScanning] = useState(false);
   const [form, setForm] = useState(empty);
   const [loading, setLoading] = useState(false);
   const [lookupMsg, setLookupMsg] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Odbierz wynik skanowania po powrocie z pełnoekranowego skanera
+  useEffect(() => {
+    const code = localStorage.getItem('scanner_result');
+    const time = parseInt(localStorage.getItem('scanner_result_time') || '0');
+    if (code && Date.now() - time < 60000) {
+      localStorage.removeItem('scanner_result');
+      localStorage.removeItem('scanner_result_time');
+      handleScan(code);
+    }
+  }, []);
+
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  const openScanner = () => {
+    const scannerUrl = `${window.location.origin}?scanner=1`;
+    const inIframe = window.self !== window.top;
+
+    if (inIframe) {
+      // FK Browser w HA iframe — nawiguj całe okno (popup powoduje "camera in use")
+      try { window.top.location.href = scannerUrl; return; } catch {}
+    }
+
+    // Chrome / direct access — popup
+    const popup = window.open(scannerUrl, 'barcode-scanner', 'width=480,height=640,popup=yes');
+    const onMsg = (e) => {
+      if (e.data?.type === 'barcode' && e.data.code) {
+        handleScan(e.data.code);
+        window.removeEventListener('message', onMsg);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    const timer = setInterval(() => {
+      if (popup?.closed) { window.removeEventListener('message', onMsg); clearInterval(timer); }
+    }, 500);
+  };
+
   const handleScan = async (code) => {
-    setScanning(false);
     set('barcode', code);
     setLoading(true);
     setLookupMsg('Szukam produktu…');
@@ -31,7 +62,11 @@ export default function AddProduct({ onAdded }) {
           category: data.category || f.category,
           image_url: data.image_url || f.image_url,
         }));
-        setLookupMsg(`✅ Znaleziono: ${data.name}`);
+        if (data.name) {
+          setLookupMsg(`✅ Znaleziono: ${data.name}`);
+        } else {
+          setLookupMsg('⚠️ Produkt znaleziony, ale brak nazwy w bazie — uzupełnij ręcznie');
+        }
       } else {
         setLookupMsg('⚠️ Nieznany produkt — uzupełnij ręcznie');
       }
@@ -56,21 +91,12 @@ export default function AddProduct({ onAdded }) {
     onAdded();
   };
 
-  if (scanning) {
-    return (
-      <div>
-        <div className="section-title">Skanuj kod kreskowy</div>
-        <Scanner onScan={handleScan} onClose={() => setScanning(false)} />
-      </div>
-    );
-  }
-
   return (
     <form onSubmit={handleSubmit}>
       <div className="section-title">Nowy produkt</div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <button type="button" className="btn btn-primary" style={{ flex: 1 }} onClick={() => setScanning(true)}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+        <button type="button" className="btn btn-primary" style={{ flex: 1 }} onClick={openScanner}>
           📷 Skanuj kod kreskowy
         </button>
         {form.barcode && (

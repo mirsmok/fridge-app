@@ -10,6 +10,8 @@ import Appliances from './components/Appliances.jsx';
 import Documents from './components/Documents.jsx';
 import Contacts from './components/Contacts.jsx';
 
+const VERSION = 'v2.12';
+
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },
   tasks:     { label:'Zadania',   icon:'✅' },
@@ -34,7 +36,11 @@ export default function App() {
   const fetchProducts = () => fetch('/api/products').then(r=>r.json()).then(setProducts).catch(()=>{});
   const fetchShopping = () => fetch('/api/shopping').then(r=>r.json()).then(setShopping).catch(()=>{});
 
-  useEffect(() => { fetchAlerts(); fetchProducts(); fetchShopping(); }, []);
+  useEffect(() => {
+    fetchAlerts(); fetchProducts(); fetchShopping();
+    // Jeśli wracamy z pełnoekranowego skanera — przejdź od razu na Dodaj
+    if (localStorage.getItem('scanner_result')) setTab('add');
+  }, []);
 
   const navigate = (module) => { setTab(module); setMenuOpen(false); };
 
@@ -54,6 +60,7 @@ export default function App() {
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <span style={{fontSize:'1.1rem'}}>{MODULES[tab]?.icon}</span>
           <h1>{MODULES[tab]?.label || 'Dom'}</h1>
+          <span style={{fontSize:'0.65rem',color:'var(--text2)',opacity:0.6}}>{VERSION}</span>
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           {totalAlerts>0 && tab!=='dashboard' && (

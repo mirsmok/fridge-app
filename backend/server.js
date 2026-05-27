@@ -314,4 +314,28 @@ app.get('/api/alerts', (_,res) => {
   res.json(alerts);
 });
 
+app.get('/api/rootca', (_, res) => {
+  const caPath = require('os').homedir() + '/.local/share/mkcert/rootCA.pem';
+  if (require('fs').existsSync(caPath)) {
+    res.setHeader('Content-Type', 'application/x-x509-ca-cert');
+    res.setHeader('Content-Disposition', 'attachment; filename="fridge-rootCA.crt"');
+    res.sendFile(caPath);
+  } else {
+    res.status(404).json({ error: 'CA not found' });
+  }
+});
+
+app.get('/fridge-panel.js', (_, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(`
+class FridgePanel extends HTMLElement {
+  set panel(_) {
+    this.style.cssText = 'display:block;width:100%;height:100%';
+    this.innerHTML = '<iframe src="https://192.168.10.185:5173" allow="camera;microphone;fullscreen" style="width:100%;height:100vh;border:none;display:block"></iframe>';
+  }
+}
+customElements.define('fridge-panel', FridgePanel);
+  `.trim());
+});
+
 app.listen(PORT, ()=>console.log(`Dom: http://localhost:${PORT}`));
