@@ -10,7 +10,7 @@ import Appliances from './components/Appliances.jsx';
 import Documents from './components/Documents.jsx';
 import Contacts from './components/Contacts.jsx';
 
-const VERSION = 'v2.12';
+const VERSION = 'v2.13';
 
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },

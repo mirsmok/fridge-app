@@ -101,9 +101,35 @@ app.delete('/api/products/:id', (req, res) => { db.prepare('DELETE FROM products
 // ── barcode ───────────────────────────────────────────────────────────────────
 const barcodeCache = new Map();
 
+function pickName(p) {
+  // Priorytet: nazwa PL → ogólna nazwa → angielska → inne języki → generic_name → brand+abbreviated
+  const candidates = [
+    p.product_name_pl,
+    p.product_name,
+    p.product_name_en,
+    p.product_name_de,
+    p.product_name_fr,
+    p.product_name_it,
+    p.generic_name_pl,
+    p.generic_name,
+    p.generic_name_en,
+    p.abbreviated_product_name,
+  ].filter(Boolean).map(s => String(s).trim()).filter(s => s.length > 0);
+
+  if (candidates.length > 0) return candidates[0];
+
+  // Fallback: marka + ilość (lepsze niż pusta nazwa)
+  const brand = (p.brands || '').split(',')[0].trim();
+  const qty = (p.quantity || '').trim();
+  if (brand && qty) return `${brand} ${qty}`;
+  if (brand) return brand;
+  return '';
+}
+
 function fetchBarcode(code) {
   return new Promise((resolve) => {
-    const url = `https://world.openfoodfacts.org/api/v2/product/${code}?fields=product_name,product_name_pl,categories_tags,image_front_url,quantity`;
+    // Bez ?fields= → pełen produkt, mamy dostęp do wszystkich language variants i brand
+    const url = `https://world.openfoodfacts.org/api/v2/product/${code}.json`;
     const req = https.get(url, { timeout: 9000 }, (resp) => {
       let data = '';
       resp.on('data', c => data += c);
@@ -111,12 +137,20 @@ function fetchBarcode(code) {
         try {
           const json = JSON.parse(data);
           if (json.status === 1) {
-            const p = json.product;
-            const name = p.product_name_pl || p.product_name || '';
+            const p = json.product || {};
+            const name = pickName(p);
             const cats = p.categories_tags || [];
             const category = cats.find(c => c.startsWith('pl:'))?.replace('pl:', '')
               || cats[0]?.replace(/^[a-z]{2}:/, '') || '';
-            resolve({ found: true, name, category, image_url: p.image_front_url || '', quantity_hint: p.quantity || '' });
+            const brand = (p.brands || '').split(',')[0].trim();
+            resolve({
+              found: true,
+              name,
+              category: category.replace(/-/g, ' '),
+              image_url: p.image_front_url || p.image_url || '',
+              quantity_hint: p.quantity || '',
+              brand,
+            });
           } else {
             resolve({ found: false });
           }
