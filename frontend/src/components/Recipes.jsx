@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { resizeImage } from '../lib/image.js';
+import { matchPantry } from '../lib/pantry.js';
 
 const CAT_ICONS = {
   dania: '🍽️', przekąski: '🥪', zupy: '🍲', desery: '🍰',
@@ -98,6 +99,7 @@ function RecipeForm({ initial, onSave, onCancel }) {
   const [form, setForm] = useState(initial || {
     title: '', category: 'dania', ingredients: '', instructions: '',
     prep_time: '', servings: '', image_url: '', notes: '', favourite: false,
+    calories: '', protein: '', carbs: '', fat: '',
   });
   const [aiOpen, setAiOpen] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -111,6 +113,10 @@ function RecipeForm({ initial, onSave, onCancel }) {
       instructions: rec.instructions || f.instructions,
       prep_time: rec.prep_time || f.prep_time,
       servings: rec.servings || f.servings,
+      calories: rec.calories || f.calories,
+      protein: rec.protein || f.protein,
+      carbs: rec.carbs || f.carbs,
+      fat: rec.fat || f.fat,
     }));
     setAiOpen(false);
   };
@@ -154,6 +160,22 @@ function RecipeForm({ initial, onSave, onCancel }) {
           </div>
         </div>
 
+        <label className="form-label">Wartości odżywcze (na porcję)</label>
+        <div className="form-row" style={{ marginBottom: 14 }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input className="form-input" value={form.calories} onChange={e => set('calories', e.target.value)} placeholder="kcal" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input className="form-input" value={form.protein} onChange={e => set('protein', e.target.value)} placeholder="białko g" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input className="form-input" value={form.carbs} onChange={e => set('carbs', e.target.value)} placeholder="węgl. g" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <input className="form-input" value={form.fat} onChange={e => set('fat', e.target.value)} placeholder="tłuszcz g" />
+          </div>
+        </div>
+
         <div className="form-group">
           <label className="form-label">Składniki (każdy w nowej linii)</label>
           <textarea className="form-input" rows={5} value={form.ingredients} onChange={e => set('ingredients', e.target.value)}
@@ -186,7 +208,71 @@ function RecipeForm({ initial, onSave, onCancel }) {
   );
 }
 
-function RecipeView({ recipe, onClose, onEdit, onDelete }) {
+function Macro({ label, value, unit, color }) {
+  if (!value) return null;
+  return (
+    <div style={{ flex: 1, textAlign: 'center', background: 'var(--bg3)', borderRadius: 8, padding: '8px 4px' }}>
+      <div style={{ fontWeight: 700, fontSize: '0.95rem', color }}>{value}<span style={{ fontSize: '0.6rem', color: 'var(--text2)' }}>{unit}</span></div>
+      <div style={{ fontSize: '0.62rem', color: 'var(--text2)' }}>{label}</div>
+    </div>
+  );
+}
+
+function ShoppingPicker({ recipe, products, onClose, onAdded }) {
+  const lines = recipe.ingredients.split('\n').map(l => l.trim())
+    .filter(l => l && !l.endsWith(':')); // pomiń nagłówki sekcji
+  const [selected, setSelected] = useState(() =>
+    // domyślnie zaznacz to, czego NIE ma w spiżarni
+    lines.map(l => !matchPantry(l, products))
+  );
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (i) => setSelected(s => s.map((v, j) => j === i ? !v : v));
+
+  const add = async () => {
+    setSaving(true);
+    for (let i = 0; i < lines.length; i++) {
+      if (!selected[i]) continue;
+      await fetch('/api/shopping', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: lines[i], quantity: 1, source: 'recipe' }),
+      });
+    }
+    setSaving(false);
+    onAdded(selected.filter(Boolean).length);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()} style={{ zIndex: 200 }}>
+      <div className="modal">
+        <div className="modal-title">🛒 Dodaj do listy zakupów</div>
+        <div style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 10 }}>
+          Składniki ze spiżarni są domyślnie odznaczone.
+        </div>
+        {lines.map((l, i) => {
+          const inP = matchPantry(l, products);
+          return (
+            <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: 'pointer' }}>
+              <input type="checkbox" checked={selected[i]} onChange={() => toggle(i)} style={{ width: 18, height: 18 }} />
+              <span style={{ flex: 1, fontSize: '0.85rem' }}>{l}</span>
+              {inP && <span style={{ fontSize: '0.6rem', color: 'var(--ok)', background: 'rgba(76,175,130,0.15)', padding: '2px 6px', borderRadius: 4, whiteSpace: 'nowrap' }}>✓ w spiżarni</span>}
+            </label>
+          );
+        })}
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Anuluj</button>
+          <button className="btn btn-ok" style={{ flex: 1 }} onClick={add} disabled={saving || !selected.some(Boolean)}>
+            {saving ? 'Dodaję…' : `Dodaj (${selected.filter(Boolean).length})`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecipeView({ recipe, products, onClose, onEdit, onDelete, onShoppingAdded }) {
+  const [picker, setPicker] = useState(false);
+  const hasMacros = recipe.calories || recipe.protein || recipe.carbs || recipe.fat;
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
@@ -205,14 +291,36 @@ function RecipeView({ recipe, onClose, onEdit, onDelete }) {
           <span>{recipe.category}</span>
         </div>
 
+        {hasMacros && (
+          <>
+            <div className="section-title">Wartości odżywcze (na porcję)</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              <Macro label="kcal" value={recipe.calories} unit="" color="var(--accent)" />
+              <Macro label="białko" value={recipe.protein} unit="g" color="var(--ok)" />
+              <Macro label="węgle" value={recipe.carbs} unit="g" color="var(--warn)" />
+              <Macro label="tłuszcz" value={recipe.fat} unit="g" color="var(--accent2)" />
+            </div>
+          </>
+        )}
+
         {recipe.ingredients && (
           <>
             <div className="section-title">Składniki</div>
-            <ul style={{ paddingLeft: 18, marginBottom: 12 }}>
-              {recipe.ingredients.split('\n').filter(l => l.trim()).map((l, i) => (
-                <li key={i} style={{ fontSize: '0.88rem', marginBottom: 3 }}>{l}</li>
-              ))}
+            <ul style={{ paddingLeft: 18, marginBottom: 10 }}>
+              {recipe.ingredients.split('\n').filter(l => l.trim()).map((l, i) => {
+                const isHeader = l.trim().endsWith(':');
+                const inP = !isHeader && matchPantry(l, products);
+                return (
+                  <li key={i} style={{ fontSize: '0.88rem', marginBottom: 3, listStyle: isHeader ? 'none' : 'disc', marginLeft: isHeader ? -18 : 0, fontWeight: isHeader ? 700 : 400 }}>
+                    {l}
+                    {inP && <span style={{ fontSize: '0.6rem', color: 'var(--ok)', marginLeft: 6 }}>✓ spiżarnia</span>}
+                  </li>
+                );
+              })}
             </ul>
+            <button className="btn btn-ok" style={{ width: '100%', marginBottom: 12 }} onClick={() => setPicker(true)}>
+              🛒 Dodaj składniki do zakupów
+            </button>
           </>
         )}
 
@@ -237,20 +345,31 @@ function RecipeView({ recipe, onClose, onEdit, onDelete }) {
           <button className="btn btn-danger" onClick={() => onDelete(recipe.id)}>🗑️ Usuń</button>
         </div>
       </div>
+
+      {picker && (
+        <ShoppingPicker recipe={recipe} products={products}
+          onClose={() => setPicker(false)}
+          onAdded={(n) => { setPicker(false); onShoppingAdded?.(n); }} />
+      )}
     </div>
   );
 }
 
-export default function Recipes() {
+export default function Recipes({ onShoppingChanged }) {
   const [recipes, setRecipes] = useState([]);
+  const [products, setProducts] = useState([]);
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [viewing, setViewing] = useState(null);
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('');
+  const [toast, setToast] = useState('');
 
   const load = () => fetch('/api/recipes').then(r => r.json()).then(setRecipes);
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    fetch('/api/products').then(r => r.json()).then(setProducts).catch(() => {});
+  }, []);
 
   const save = async (form) => {
     const method = form.id ? 'PUT' : 'POST';
@@ -269,6 +388,21 @@ export default function Recipes() {
     e.stopPropagation();
     await fetch(`/api/recipes/${r.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...r, favourite: !r.favourite }) });
     load();
+  };
+
+  const addAllToShopping = async (r, e) => {
+    e.stopPropagation();
+    const lines = (r.ingredients || '').split('\n').map(l => l.trim()).filter(l => l && !l.endsWith(':'));
+    if (lines.length === 0) { setToast('Przepis nie ma składników'); setTimeout(() => setToast(''), 3000); return; }
+    for (const name of lines) {
+      await fetch('/api/shopping', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, quantity: 1, source: 'recipe' }),
+      });
+    }
+    onShoppingChanged?.();
+    setToast(`Dodano ${lines.length} ${lines.length === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
+    setTimeout(() => setToast(''), 3000);
   };
 
   const filtered = recipes.filter(r => {
@@ -293,7 +427,10 @@ export default function Recipes() {
             {r.servings && <span>🍽️ {r.servings}</span>}
           </div>
         </div>
-        <button className="btn btn-icon" onClick={(e) => toggleFav(r, e)} style={{ flexShrink: 0 }}>{r.favourite ? '★' : '☆'}</button>
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button className="btn btn-icon" onClick={(e) => toggleFav(r, e)}>{r.favourite ? '★' : '☆'}</button>
+          <button className="btn btn-icon" onClick={(e) => addAllToShopping(r, e)} title="Dodaj składniki do zakupów">🛒</button>
+        </div>
       </div>
     </div>
   );
@@ -325,8 +462,23 @@ export default function Recipes() {
       )}
 
       {viewing && !editing && (
-        <RecipeView recipe={viewing} onClose={() => setViewing(null)}
-          onEdit={(r) => { setEditing(r); }} onDelete={del} />
+        <RecipeView recipe={viewing} products={products} onClose={() => setViewing(null)}
+          onEdit={(r) => { setEditing(r); }} onDelete={del}
+          onShoppingAdded={(n) => {
+            onShoppingChanged?.();
+            setToast(`Dodano ${n} ${n === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
+            setTimeout(() => setToast(''), 3000);
+          }} />
+      )}
+
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          background: 'var(--ok)', color: '#fff', padding: '10px 18px', borderRadius: 20,
+          fontSize: '0.85rem', fontWeight: 600, zIndex: 300, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}>
+          ✅ {toast}
+        </div>
       )}
     </div>
   );

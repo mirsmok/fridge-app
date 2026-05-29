@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { matchPantry } from '../lib/pantry.js';
 
-export default function ShoppingList({ items, onRefresh }) {
+export default function ShoppingList({ items, onRefresh, products = [] }) {
   const [newName, setNewName] = useState('');
   const [newQty, setNewQty] = useState(1);
   const [adding, setAdding] = useState(false);
@@ -22,6 +23,12 @@ export default function ShoppingList({ items, onRefresh }) {
   const clearChecked = async () => {
     if (!confirm('Usunąć zaznaczone pozycje?')) return;
     await fetch('/api/shopping', { method: 'DELETE' });
+    onRefresh();
+  };
+
+  const clearAll = async () => {
+    if (!confirm('Wyczyścić CAŁĄ listę zakupów?')) return;
+    await fetch('/api/shopping?all=1', { method: 'DELETE' });
     onRefresh();
   };
 
@@ -63,6 +70,14 @@ export default function ShoppingList({ items, onRefresh }) {
         <button className="btn btn-primary" type="submit" disabled={adding}>+</button>
       </form>
 
+      {items.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+          <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '5px 12px' }} onClick={clearAll}>
+            🗑️ Wyczyść całą listę
+          </button>
+        </div>
+      )}
+
       {items.length === 0 && (
         <div className="empty-state">
           <div className="emoji">🛒</div>
@@ -73,14 +88,20 @@ export default function ShoppingList({ items, onRefresh }) {
       {unchecked.length > 0 && (
         <>
           <div className="section-title">Do kupienia ({unchecked.length})</div>
-          {unchecked.map(item => (
-            <div key={item.id} className="shopping-item">
-              <input type="checkbox" className="shopping-checkbox" checked={false} onChange={() => toggle(item)} />
-              <span className="shopping-name">{item.name}</span>
-              <span className="shopping-qty">{item.quantity} {item.unit}</span>
-              <button className="btn btn-icon" style={{ padding: '4px 6px' }} onClick={() => remove(item.id)}>✕</button>
-            </div>
-          ))}
+          {unchecked.map(item => {
+            const inP = matchPantry(item.name, products);
+            return (
+              <div key={item.id} className="shopping-item">
+                <input type="checkbox" className="shopping-checkbox" checked={false} onChange={() => toggle(item)} />
+                <span className="shopping-name">
+                  {item.name}
+                  {inP && <span style={{ fontSize: '0.6rem', color: 'var(--ok)', background: 'rgba(76,175,130,0.15)', padding: '2px 6px', borderRadius: 4, marginLeft: 6, whiteSpace: 'nowrap' }}>✓ w spiżarni</span>}
+                </span>
+                <span className="shopping-qty">{item.quantity} {item.unit}</span>
+                <button className="btn btn-icon" style={{ padding: '4px 6px' }} onClick={() => remove(item.id)}>✕</button>
+              </div>
+            );
+          })}
         </>
       )}
 

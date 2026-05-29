@@ -14,7 +14,7 @@ import Settings from './components/Settings.jsx';
 import Recipes from './components/Recipes.jsx';
 import { logDbg } from './lib/log.js';
 
-const VERSION = 'v2.28';
+const VERSION = 'v2.31';
 
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },
@@ -89,13 +89,13 @@ export default function App() {
         {tab==='periodic'   && <PeriodicTasks />}
         {tab==='fridge'     && <ProductList products={products} onRefresh={fetchProducts} onAddToShopping={addToShopping} />}
         {tab==='add'        && <AddProduct onAdded={()=>{ fetchProducts(); fetchAlerts(); navigate('fridge'); }} />}
-        {tab==='shopping'   && <ShoppingList items={shopping} onRefresh={fetchShopping} />}
+        {tab==='shopping'   && <ShoppingList items={shopping} onRefresh={fetchShopping} products={products} />}
         {tab==='meters'     && <Meters />}
         {tab==='appliances' && <Appliances />}
         {tab==='documents'  && <Documents />}
         {tab==='contacts'   && <Contacts />}
         {tab==='recognize'  && <Recognize onSaved={()=>{ fetchProducts(); fetchAlerts(); }} />}
-        {tab==='recipes'    && <Recipes />}
+        {tab==='recipes'    && <Recipes onShoppingChanged={fetchShopping} />}
         {tab==='settings'   && <Settings />}
       </main>
 

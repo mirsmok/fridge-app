@@ -81,9 +81,15 @@ db.exec(`
     ingredients TEXT DEFAULT '', instructions TEXT DEFAULT '',
     prep_time TEXT DEFAULT '', servings TEXT DEFAULT '',
     image_url TEXT DEFAULT '', notes TEXT DEFAULT '',
+    calories TEXT DEFAULT '', protein TEXT DEFAULT '', carbs TEXT DEFAULT '', fat TEXT DEFAULT '',
     favourite INTEGER DEFAULT 0, created_date TEXT DEFAULT (date('now'))
   );
 `);
+
+// Migracja: dodaj kolumny makroskładników do istniejącej tabeli recipes
+for (const col of ['calories', 'protein', 'carbs', 'fat']) {
+  try { db.exec(`ALTER TABLE recipes ADD COLUMN ${col} TEXT DEFAULT ''`); } catch {}
+}
 
 function calcNextDue(lastDone, intervalDays) {
   if (!lastDone) return null;
@@ -338,7 +344,11 @@ app.put('/api/shopping/:id', (req,res) => {
   res.json(db.prepare('SELECT * FROM shopping_list WHERE id=?').get(req.params.id));
 });
 app.delete('/api/shopping/:id', (req,res) => { db.prepare('DELETE FROM shopping_list WHERE id=?').run(req.params.id); res.json({success:true}); });
-app.delete('/api/shopping', (_,res) => { db.prepare('DELETE FROM shopping_list WHERE checked=1').run(); res.json({success:true}); });
+app.delete('/api/shopping', (req,res) => {
+  if (req.query.all === '1') db.prepare('DELETE FROM shopping_list').run();
+  else db.prepare('DELETE FROM shopping_list WHERE checked=1').run();
+  res.json({success:true});
+});
 
 // ── tasks ─────────────────────────────────────────────────────────────────────
 app.get('/api/tasks', (_,res) => res.json(db.prepare(`
@@ -462,15 +472,15 @@ app.delete('/api/contacts/:id', (req,res) => { db.prepare('DELETE FROM contacts 
 // ── recipes ───────────────────────────────────────────────────────────────────
 app.get('/api/recipes', (_,res) => res.json(db.prepare('SELECT * FROM recipes ORDER BY favourite DESC, title ASC').all()));
 app.post('/api/recipes', (req,res) => {
-  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite } = req.body;
-  const r=db.prepare(`INSERT INTO recipes (title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite) VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0);
+  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite,calories,protein,carbs,fat } = req.body;
+  const r=db.prepare(`INSERT INTO recipes (title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite,calories,protein,carbs,fat) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0,calories||'',protein||'',carbs||'',fat||'');
   res.json(db.prepare('SELECT * FROM recipes WHERE id=?').get(r.lastInsertRowid));
 });
 app.put('/api/recipes/:id', (req,res) => {
-  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite } = req.body;
-  db.prepare(`UPDATE recipes SET title=?,category=?,ingredients=?,instructions=?,prep_time=?,servings=?,image_url=?,notes=?,favourite=? WHERE id=?`)
-    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0,req.params.id);
+  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite,calories,protein,carbs,fat } = req.body;
+  db.prepare(`UPDATE recipes SET title=?,category=?,ingredients=?,instructions=?,prep_time=?,servings=?,image_url=?,notes=?,favourite=?,calories=?,protein=?,carbs=?,fat=? WHERE id=?`)
+    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0,calories||'',protein||'',carbs||'',fat||'',req.params.id);
   res.json(db.prepare('SELECT * FROM recipes WHERE id=?').get(req.params.id));
 });
 app.delete('/api/recipes/:id', (req,res) => { db.prepare('DELETE FROM recipes WHERE id=?').run(req.params.id); res.json({success:true}); });
@@ -537,8 +547,8 @@ function htmlToText(html) {
 }
 
 const RECIPE_FORMAT = `Zwróć WYŁĄCZNIE JSON bez dodatkowego tekstu w formacie:
-{"title":"nazwa potrawy","category":"jedna z: dania, przekąski, zupy, desery, ciasta, napoje, nalewki, wędliny, przetwory, pieczywo, sałatki, inne","ingredients":"każdy składnik w osobnej linii z ilościami","instructions":"przygotowanie krok po kroku","prep_time":"czas, np. 45 min","servings":"liczba porcji, np. 4"}
-Wszystko po polsku. Jeśli czegoś brak, zostaw pusty string. Składniki i kroki rozdzielaj znakami nowej linii (\\n).`;
+{"title":"nazwa potrawy","category":"jedna z: dania, przekąski, zupy, desery, ciasta, napoje, nalewki, wędliny, przetwory, pieczywo, sałatki, inne","ingredients":"każdy składnik w osobnej linii z ilościami","instructions":"przygotowanie krok po kroku","prep_time":"czas, np. 45 min","servings":"liczba porcji, np. 4","calories":"kcal na porcję, sama liczba np. 350","protein":"białko w gramach na porcję, sama liczba np. 25","carbs":"węglowodany w gramach na porcję, sama liczba np. 40","fat":"tłuszcze w gramach na porcję, sama liczba np. 12"}
+Wszystko po polsku. Wartości odżywcze oszacuj na jedną porcję (same liczby bez jednostek). Jeśli czegoś brak, zostaw pusty string. Składniki i kroki rozdzielaj znakami nowej linii (\\n).`;
 
 app.post('/api/recipe-ai', async (req, res) => {
   const { images, url, prompt } = req.body || {};
