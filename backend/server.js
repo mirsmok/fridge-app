@@ -1,15 +1,20 @@
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
+const http = require('http');
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+
+let secrets = {};
+try { secrets = require('./secrets'); } catch {}
 
 const app = express();
 const PORT = 3001;
 const db = new Database(path.join(__dirname, 'fridge.db'));
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' })); // duże zdjęcia base64
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS products (
@@ -69,6 +74,14 @@ db.exec(`
     name TEXT NOT NULL, role TEXT DEFAULT '',
     phone TEXT DEFAULT '', email TEXT DEFAULT '',
     notes TEXT DEFAULT '', favourite INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS recipes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL, category TEXT DEFAULT 'dania',
+    ingredients TEXT DEFAULT '', instructions TEXT DEFAULT '',
+    prep_time TEXT DEFAULT '', servings TEXT DEFAULT '',
+    image_url TEXT DEFAULT '', notes TEXT DEFAULT '',
+    favourite INTEGER DEFAULT 0, created_date TEXT DEFAULT (date('now'))
   );
 `);
 
@@ -179,6 +192,138 @@ app.get('/api/barcode/:code', async (req, res) => {
 
   if (result.found) barcodeCache.set(code, result);
   res.json(result);
+});
+
+// ── gemini vision recognition ─────────────────────────────────────────────────
+function geminiRecognize(imageBase64, mimeType) {
+  return new Promise((resolve, reject) => {
+    if (!secrets.GEMINI_API_KEY) {
+      return reject(new Error('Brak klucza Gemini API (backend/secrets.js)'));
+    }
+
+    const prompt = `Przeanalizuj zdjęcie półki w lodówce / spiżarni / zamrażarce i zidentyfikuj wszystkie widoczne produkty spożywcze.
+
+Dla każdego rozpoznanego produktu zwróć:
+- name: konkretna nazwa produktu po polsku (np. "Mleko 3,2%", "Jogurt naturalny Bakoma", "Pomidory koktajlowe")
+- quantity: liczba (jeśli widać kilka opakowań tego samego, podaj liczbę; w innym przypadku 1)
+- unit: jednostka — jedno z: szt, g, kg, ml, l, op
+- category: krótka kategoria po polsku (np. "nabiał", "warzywa", "mięso", "napoje", "przekąski")
+- confidence: pewność rozpoznania 0.0-1.0
+- box: bounding box w formacie [ymin, xmin, ymax, xmax] gdzie współrzędne są znormalizowane 0-1000 (system Gemini)
+
+ZWRÓĆ WYŁĄCZNIE JSON tablicę bez żadnego dodatkowego tekstu, w formacie:
+[{"name":"...","quantity":1,"unit":"szt","category":"...","confidence":0.9,"box":[100,200,500,800]}, ...]
+
+Jeśli nie widać żadnych produktów, zwróć [].`;
+
+    const body = JSON.stringify({
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } },
+        ],
+      }],
+      generationConfig: {
+        temperature: 0.2,
+        response_mime_type: 'application/json',
+      },
+    });
+
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${secrets.GEMINI_API_KEY}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 60000,
+    }, (resp) => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.error) return reject(new Error(json.error.message || 'Gemini error'));
+          const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+          const items = JSON.parse(text);
+          resolve(Array.isArray(items) ? items : []);
+        } catch (e) { reject(new Error(`Parse error: ${e.message}; raw: ${data.slice(0, 500)}`)); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout 60s')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+app.post('/api/recognize', async (req, res) => {
+  const { image, mimeType } = req.body || {};
+  if (!image) return res.status(400).json({ error: 'Brak pola image (base64)' });
+  const cleanImage = image.replace(/^data:[^;]+;base64,/, '');
+  console.log(`[recognize] start, image ${Math.round(cleanImage.length / 1024)} KB`);
+  try {
+    const t0 = Date.now();
+    const items = await geminiRecognize(cleanImage, mimeType);
+    console.log(`[recognize] OK, ${items.length} items, ${Date.now() - t0}ms`);
+    res.json({ items });
+  } catch (e) {
+    console.error(`[recognize] ERROR:`, e.message);
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// ── settings + debug ──────────────────────────────────────────────────────────
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const DEBUG_LOG_FILE = path.join(__dirname, 'debug.log');
+const MAX_DEBUG_BYTES = 1024 * 1024; // 1 MB rotation
+
+function readSettings() {
+  try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
+  catch { return { debug_enabled: false }; }
+}
+function writeSettings(s) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2));
+}
+
+function appendDebug(source, msg) {
+  if (!readSettings().debug_enabled) return;
+  try {
+    if (fs.existsSync(DEBUG_LOG_FILE) && fs.statSync(DEBUG_LOG_FILE).size > MAX_DEBUG_BYTES) {
+      fs.renameSync(DEBUG_LOG_FILE, DEBUG_LOG_FILE + '.old');
+    }
+    fs.appendFileSync(DEBUG_LOG_FILE, `${new Date().toISOString()} [${source}] ${msg}\n`);
+  } catch {}
+}
+
+// Loguj każdy request do /api/* gdy debug włączony
+app.use('/api', (req, _res, next) => {
+  appendDebug('backend', `${req.method} ${req.originalUrl}`);
+  next();
+});
+
+app.get('/api/settings', (_, res) => res.json(readSettings()));
+app.put('/api/settings', (req, res) => {
+  const merged = { ...readSettings(), ...(req.body || {}) };
+  writeSettings(merged);
+  res.json(merged);
+});
+
+app.post('/api/debug', (req, res) => {
+  if (!readSettings().debug_enabled) return res.json({ ok: true, skipped: true });
+  const { msg, source } = req.body || {};
+  if (!msg) return res.status(400).json({ error: 'no msg' });
+  appendDebug(source || '?', msg);
+  res.json({ ok: true });
+});
+
+app.get('/api/debug', (_, res) => {
+  try { res.type('text/plain').send(fs.readFileSync(DEBUG_LOG_FILE, 'utf8')); }
+  catch { res.type('text/plain').send(''); }
+});
+
+app.delete('/api/debug', (_, res) => {
+  try { fs.unlinkSync(DEBUG_LOG_FILE); } catch {}
+  try { fs.unlinkSync(DEBUG_LOG_FILE + '.old'); } catch {}
+  res.json({ ok: true });
 });
 
 // ── shopping ──────────────────────────────────────────────────────────────────
@@ -314,6 +459,125 @@ app.put('/api/contacts/:id', (req,res) => {
 });
 app.delete('/api/contacts/:id', (req,res) => { db.prepare('DELETE FROM contacts WHERE id=?').run(req.params.id); res.json({success:true}); });
 
+// ── recipes ───────────────────────────────────────────────────────────────────
+app.get('/api/recipes', (_,res) => res.json(db.prepare('SELECT * FROM recipes ORDER BY favourite DESC, title ASC').all()));
+app.post('/api/recipes', (req,res) => {
+  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite } = req.body;
+  const r=db.prepare(`INSERT INTO recipes (title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite) VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0);
+  res.json(db.prepare('SELECT * FROM recipes WHERE id=?').get(r.lastInsertRowid));
+});
+app.put('/api/recipes/:id', (req,res) => {
+  const { title,category,ingredients,instructions,prep_time,servings,image_url,notes,favourite } = req.body;
+  db.prepare(`UPDATE recipes SET title=?,category=?,ingredients=?,instructions=?,prep_time=?,servings=?,image_url=?,notes=?,favourite=? WHERE id=?`)
+    .run(title,category||'dania',ingredients||'',instructions||'',prep_time||'',servings||'',image_url||'',notes||'',favourite?1:0,req.params.id);
+  res.json(db.prepare('SELECT * FROM recipes WHERE id=?').get(req.params.id));
+});
+app.delete('/api/recipes/:id', (req,res) => { db.prepare('DELETE FROM recipes WHERE id=?').run(req.params.id); res.json({success:true}); });
+
+// ── recipe AI (Gemini) ────────────────────────────────────────────────────────
+function callGeminiJSON(parts) {
+  return new Promise((resolve, reject) => {
+    if (!secrets.GEMINI_API_KEY) return reject(new Error('Brak klucza Gemini API (backend/secrets.js)'));
+    const body = JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.2, response_mime_type: 'application/json' },
+    });
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${secrets.GEMINI_API_KEY}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 60000,
+    }, (resp) => {
+      let data = '';
+      resp.on('data', c => data += c);
+      resp.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.error) return reject(new Error(json.error.message || 'Gemini error'));
+          resolve(json.candidates?.[0]?.content?.parts?.[0]?.text || '');
+        } catch (e) { reject(new Error(`Parse error: ${e.message}; raw: ${data.slice(0,400)}`)); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout 60s (Gemini)')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+function fetchUrlText(url, depth = 0) {
+  return new Promise((resolve, reject) => {
+    if (depth > 4) return reject(new Error('Za dużo przekierowań'));
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; DomApp/1.0)' } }, (resp) => {
+      if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+        const next = new URL(resp.headers.location, url).href;
+        resp.resume();
+        return resolve(fetchUrlText(next, depth + 1));
+      }
+      let data = '';
+      resp.on('data', c => { data += c; if (data.length > 3_000_000) req.destroy(); });
+      resp.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout pobierania URL')); });
+  });
+}
+
+function htmlToText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ').trim();
+}
+
+const RECIPE_FORMAT = `Zwróć WYŁĄCZNIE JSON bez dodatkowego tekstu w formacie:
+{"title":"nazwa potrawy","category":"jedna z: dania, przekąski, zupy, desery, ciasta, napoje, nalewki, wędliny, przetwory, pieczywo, sałatki, inne","ingredients":"każdy składnik w osobnej linii z ilościami","instructions":"przygotowanie krok po kroku","prep_time":"czas, np. 45 min","servings":"liczba porcji, np. 4"}
+Wszystko po polsku. Jeśli czegoś brak, zostaw pusty string. Składniki i kroki rozdzielaj znakami nowej linii (\\n).`;
+
+app.post('/api/recipe-ai', async (req, res) => {
+  const { images, url, prompt } = req.body || {};
+  const hasPrompt = prompt && prompt.trim();
+  const hasUrl = url && url.trim();
+  const hasImages = Array.isArray(images) && images.length > 0;
+  try {
+    if (!hasPrompt && !hasUrl && !hasImages) {
+      return res.status(400).json({ error: 'Podaj opis, zdjęcia lub URL' });
+    }
+    const task = hasPrompt
+      ? `Wygeneruj kompletny, realistyczny przepis kulinarny na podstawie opisu użytkownika: "${prompt.trim()}". Dobierz typowe składniki i proporcje.`
+      : `Wyodrębnij przepis kulinarny z dostarczonych materiałów (zdjęcia przepisu/potrawy lub treść strony).`;
+    const parts = [{ text: `${task}\n${RECIPE_FORMAT}` }];
+
+    if (hasUrl) {
+      appendDebug('recipe-ai', `URL: ${url}`);
+      const html = await fetchUrlText(url.trim());
+      const text = htmlToText(html).slice(0, 30000);
+      parts.push({ text: `\n\nTreść strony:\n${text}` });
+    }
+    if (hasImages) {
+      for (const img of images) {
+        parts.push({ inline_data: { mime_type: 'image/jpeg', data: img.replace(/^data:[^;]+;base64,/, '') } });
+      }
+    }
+
+    appendDebug('recipe-ai', `start, prompt=${!!hasPrompt} url=${!!hasUrl} imgs=${hasImages ? images.length : 0}`);
+    const t0 = Date.now();
+    const txt = await callGeminiJSON(parts);
+    const recipe = JSON.parse(txt);
+    appendDebug('recipe-ai', `OK, ${Date.now() - t0}ms, title="${recipe.title || ''}"`);
+    res.json({ recipe });
+  } catch (e) {
+    appendDebug('recipe-ai', `ERROR: ${e.message}`);
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
 // ── alerts ────────────────────────────────────────────────────────────────────
 app.get('/api/alerts', (_,res) => {
   const today=new Date().toISOString().split('T')[0];
@@ -372,4 +636,7 @@ customElements.define('fridge-panel', FridgePanel);
   `.trim());
 });
 
-app.listen(PORT, ()=>console.log(`Dom: http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Dom: http://localhost:${PORT}`);
+  appendDebug('backend', `server started, PID ${process.pid}, debug_enabled=${readSettings().debug_enabled}`);
+});

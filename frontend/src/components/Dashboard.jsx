@@ -54,11 +54,15 @@ export default function Dashboard({ onNavigate }) {
     { key:'tasks', icon:'✅', label:'Zadania', badge: stats.tasksOpen, sub: stats.tasksToday ? `${stats.tasksToday} na dziś` : `${stats.tasksOpen||0} otwartych` },
     { key:'periodic', icon:'🔄', label:'Przeglądy', badge: stats.periodicDue, sub: stats.periodicDue ? `${stats.periodicDue} zaległych` : 'wszystko OK' },
     { key:'fridge', icon:'🧊', label:'Spiżarnia', badge: 0, sub: `${stats.products||0} produktów` },
+    { key:'add', icon:'＋', label:'Dodaj produkt', badge: 0, sub: 'skanuj kod' },
+    { key:'recognize', icon:'📸', label:'Rozpoznaj', badge: 0, sub: 'zdjęcie → AI' },
     { key:'shopping', icon:'🛒', label:'Zakupy', badge: stats.shoppingPending, sub: `${stats.shoppingPending||0} do kupienia` },
+    { key:'recipes', icon:'📖', label:'Przepisy', badge: 0, sub: 'dania & nalewki' },
     { key:'meters', icon:'📊', label:'Liczniki', badge: 0, sub: 'odczyty' },
     { key:'appliances', icon:'🔧', label:'Urządzenia', badge: 0, sub: 'sprzęt domowy' },
     { key:'documents', icon:'📄', label:'Dokumenty', badge: 0, sub: 'ważne dokumenty' },
     { key:'contacts', icon:'📞', label:'Kontakty', badge: 0, sub: 'serwis & pomoc' },
+    { key:'settings', icon:'⚙️', label:'Ustawienia', badge: 0, sub: 'debug & config' },
   ];
 
   return (

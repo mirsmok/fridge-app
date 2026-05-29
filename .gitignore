@@ -4,3 +4,10 @@ fridge.db
 .env
 dist/
 .vite/
+secrets.js
+cert.pem
+cert-key.pem
+sprint*/
+settings.json
+debug.log
+debug.log.old

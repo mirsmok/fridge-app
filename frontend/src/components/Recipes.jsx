@@ -1,0 +1,333 @@
+import { useState, useEffect, useRef } from 'react';
+import { resizeImage } from '../lib/image.js';
+
+const CAT_ICONS = {
+  dania: '🍽️', przekąski: '🥪', zupy: '🍲', desery: '🍰',
+  ciasta: '🧁', napoje: '🥤', nalewki: '🍶', wędliny: '🥓',
+  przetwory: '🫙', pieczywo: '🍞', sałatki: '🥗', inne: '📖',
+};
+const CATS = Object.keys(CAT_ICONS);
+
+function AiPanel({ onResult, onClose }) {
+  const [images, setImages] = useState([]);
+  const [url, setUrl] = useState('');
+  const [desc, setDesc] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const fileRef = useRef(null);
+
+  const addFiles = async (files) => {
+    setError('');
+    const arr = Array.from(files || []);
+    for (const f of arr) {
+      try { const d = await resizeImage(f); setImages(prev => [...prev, d]); }
+      catch (e) { setError(String(e.message || e)); }
+    }
+  };
+
+  const canAnalyze = images.length > 0 || url.trim() || desc.trim();
+
+  const analyze = async () => {
+    setLoading(true); setError('');
+    try {
+      const body = {};
+      if (desc.trim()) body.prompt = desc.trim();
+      if (images.length) body.images = images;
+      if (url.trim()) body.url = url.trim();
+      const r = await fetch('/api/recipe-ai', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      onResult(data.recipe || {});
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ background: 'var(--bg3)', border: '1px solid var(--accent)', borderRadius: 8, padding: 12, marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>🤖 Asystent AI</span>
+        <button className="btn btn-icon" onClick={onClose}>✕</button>
+      </div>
+      <div style={{ fontSize: '0.72rem', color: 'var(--text2)', marginBottom: 10 }}>
+        Opisz danie, dodaj zdjęcia lub wklej link — Gemini przygotuje przepis.
+      </div>
+
+      <label className="form-label">✍️ Opis dania</label>
+      <textarea className="form-input" rows={2} style={{ marginBottom: 8, resize: 'vertical' }}
+        placeholder="np. sałatka z tuńczyka, lekka i szybka" value={desc} onChange={e => setDesc(e.target.value)} />
+
+      <div style={{ fontSize: '0.72rem', color: 'var(--text2)', textAlign: 'center', margin: '6px 0' }}>— lub —</div>
+
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+        onChange={e => addFiles(e.target.files)} />
+      <button className="btn btn-ghost" style={{ width: '100%', marginBottom: 8 }} onClick={() => fileRef.current?.click()}>
+        📸 Dodaj zdjęcia ({images.length})
+      </button>
+
+      {images.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          {images.map((src, i) => (
+            <div key={i} style={{ position: 'relative' }}>
+              <img src={src} alt="" style={{ height: 50, width: 50, objectFit: 'cover', borderRadius: 4 }} />
+              <button onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}
+                style={{ position: 'absolute', top: -6, right: -6, background: 'var(--danger)', color: '#fff',
+                  border: 'none', borderRadius: '50%', width: 18, height: 18, fontSize: '0.7rem', cursor: 'pointer' }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: '0.72rem', color: 'var(--text2)', textAlign: 'center', margin: '6px 0' }}>— lub —</div>
+
+      <input className="form-input" style={{ marginBottom: 8 }} placeholder="https://przepis-online.pl/..."
+        value={url} onChange={e => setUrl(e.target.value)} />
+
+      {error && <div className="alert-banner" style={{ marginBottom: 8, fontSize: '0.78rem' }}>⚠️ {error}</div>}
+
+      <button className="btn btn-primary" style={{ width: '100%' }} onClick={analyze} disabled={loading || !canAnalyze}>
+        {loading ? '⏳ Analizuję…' : '✨ Przygotuj przepis'}
+      </button>
+    </div>
+  );
+}
+
+function RecipeForm({ initial, onSave, onCancel }) {
+  const [form, setForm] = useState(initial || {
+    title: '', category: 'dania', ingredients: '', instructions: '',
+    prep_time: '', servings: '', image_url: '', notes: '', favourite: false,
+  });
+  const [aiOpen, setAiOpen] = useState(false);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const applyAi = (rec) => {
+    setForm(f => ({
+      ...f,
+      title: rec.title || f.title,
+      category: CATS.includes(rec.category) ? rec.category : f.category,
+      ingredients: rec.ingredients || f.ingredients,
+      instructions: rec.instructions || f.instructions,
+      prep_time: rec.prep_time || f.prep_time,
+      servings: rec.servings || f.servings,
+    }));
+    setAiOpen(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onCancel()}>
+      <div className="modal">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <span style={{ fontSize: '1rem', fontWeight: 700 }}>{initial?.id ? 'Edytuj przepis' : 'Nowy przepis'}</span>
+          <button className="btn btn-primary" style={{ fontSize: '0.78rem', padding: '5px 10px' }}
+            onClick={() => setAiOpen(o => !o)} title="Uzupełnij przez AI">
+            🤖 AI
+          </button>
+        </div>
+
+        {aiOpen && <AiPanel onResult={applyAi} onClose={() => setAiOpen(false)} />}
+
+        <div className="form-group">
+          <label className="form-label">Tytuł *</label>
+          <input className="form-input" value={form.title} onChange={e => set('title', e.target.value)} placeholder="np. Schabowy klasyczny" />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Kategoria</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {CATS.map(c => (
+              <button key={c} className={`btn ${form.category === c ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: '0.7rem', padding: '3px 7px' }}
+                onClick={() => set('category', c)}>{CAT_ICONS[c]} {c}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label className="form-label">Czas przygotowania</label>
+            <input className="form-input" value={form.prep_time} onChange={e => set('prep_time', e.target.value)} placeholder="np. 45 min" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Porcje</label>
+            <input className="form-input" value={form.servings} onChange={e => set('servings', e.target.value)} placeholder="np. 4" />
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Składniki (każdy w nowej linii)</label>
+          <textarea className="form-input" rows={5} value={form.ingredients} onChange={e => set('ingredients', e.target.value)}
+            placeholder={'500 g schabu\n2 jajka\nbułka tarta\nsól, pieprz'} style={{ resize: 'vertical' }} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Przygotowanie</label>
+          <textarea className="form-input" rows={6} value={form.instructions} onChange={e => set('instructions', e.target.value)}
+            placeholder="Opis krok po kroku…" style={{ resize: 'vertical' }} />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Notatki</label>
+          <textarea className="form-input" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)} style={{ resize: 'vertical' }} />
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!form.favourite} onChange={e => set('favourite', e.target.checked)}
+            style={{ width: 18, height: 18, accentColor: 'var(--warn)' }} />
+          <span style={{ fontSize: '0.85rem' }}>⭐ Ulubiony (na górze listy)</span>
+        </label>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onCancel}>Anuluj</button>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => onSave(form)} disabled={!form.title.trim()}>Zapisz</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecipeView({ recipe, onClose, onEdit, onDelete }) {
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+          <div style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>{CAT_ICONS[recipe.category] || '📖'}</span>
+            {recipe.title}
+            {recipe.favourite ? <span>⭐</span> : null}
+          </div>
+          <button className="btn btn-icon" onClick={onClose}>✕</button>
+        </div>
+
+        <div style={{ fontSize: '0.75rem', color: 'var(--text2)', marginBottom: 12, display: 'flex', gap: 12 }}>
+          {recipe.prep_time && <span>⏱️ {recipe.prep_time}</span>}
+          {recipe.servings && <span>🍽️ {recipe.servings} porcji</span>}
+          <span>{recipe.category}</span>
+        </div>
+
+        {recipe.ingredients && (
+          <>
+            <div className="section-title">Składniki</div>
+            <ul style={{ paddingLeft: 18, marginBottom: 12 }}>
+              {recipe.ingredients.split('\n').filter(l => l.trim()).map((l, i) => (
+                <li key={i} style={{ fontSize: '0.88rem', marginBottom: 3 }}>{l}</li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {recipe.instructions && (
+          <>
+            <div className="section-title">Przygotowanie</div>
+            <div style={{ fontSize: '0.88rem', whiteSpace: 'pre-wrap', lineHeight: 1.5, marginBottom: 12 }}>
+              {recipe.instructions}
+            </div>
+          </>
+        )}
+
+        {recipe.notes && (
+          <>
+            <div className="section-title">Notatki</div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--text2)', fontStyle: 'italic', marginBottom: 12 }}>{recipe.notes}</div>
+          </>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => onEdit(recipe)}>✏️ Edytuj</button>
+          <button className="btn btn-danger" onClick={() => onDelete(recipe.id)}>🗑️ Usuń</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Recipes() {
+  const [recipes, setRecipes] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('');
+
+  const load = () => fetch('/api/recipes').then(r => r.json()).then(setRecipes);
+  useEffect(() => { load(); }, []);
+
+  const save = async (form) => {
+    const method = form.id ? 'PUT' : 'POST';
+    const url = form.id ? `/api/recipes/${form.id}` : '/api/recipes';
+    await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+    setEditing(null); setAdding(false); setViewing(null); load();
+  };
+
+  const del = async (id) => {
+    if (!confirm('Usunąć przepis?')) return;
+    await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+    setViewing(null); load();
+  };
+
+  const toggleFav = async (r, e) => {
+    e.stopPropagation();
+    await fetch(`/api/recipes/${r.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...r, favourite: !r.favourite }) });
+    load();
+  };
+
+  const filtered = recipes.filter(r => {
+    const q = search.toLowerCase();
+    const matchSearch = !q || r.title.toLowerCase().includes(q) || (r.ingredients || '').toLowerCase().includes(q);
+    const matchCat = !catFilter || r.category === catFilter;
+    return matchSearch && matchCat;
+  });
+
+  const RecipeCard = ({ r }) => (
+    <div className="card" style={{ cursor: 'pointer' }} onClick={() => setViewing(r)}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ fontSize: '1.8rem', flexShrink: 0 }}>{CAT_ICONS[r.category] || '📖'}</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+            {r.title}
+            {r.favourite ? <span style={{ fontSize: '0.8rem' }}>⭐</span> : null}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text2)', display: 'flex', gap: 10, marginTop: 2 }}>
+            <span>{r.category}</span>
+            {r.prep_time && <span>⏱️ {r.prep_time}</span>}
+            {r.servings && <span>🍽️ {r.servings}</span>}
+          </div>
+        </div>
+        <button className="btn btn-icon" onClick={(e) => toggleFav(r, e)} style={{ flexShrink: 0 }}>{r.favourite ? '★' : '☆'}</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+        <input className="search-input" style={{ flex: 1, marginBottom: 0 }} placeholder="🔍 Szukaj przepisu / składnika…" value={search} onChange={e => setSearch(e.target.value)} />
+        <button className="btn btn-primary" onClick={() => setAdding(true)}>+ Dodaj</button>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 12 }}>
+        <button className={`btn ${!catFilter ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: '0.7rem', padding: '3px 8px' }}
+          onClick={() => setCatFilter('')}>Wszystkie</button>
+        {CATS.map(c => (
+          <button key={c} className={`btn ${catFilter === c ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: '0.7rem', padding: '3px 7px' }}
+            onClick={() => setCatFilter(catFilter === c ? '' : c)}>{CAT_ICONS[c]} {c}</button>
+        ))}
+      </div>
+
+      {filtered.length === 0 && (
+        <div className="empty-state"><div className="emoji">📖</div><p>Brak przepisów — dodaj swój pierwszy!</p></div>
+      )}
+
+      {filtered.map(r => <RecipeCard key={r.id} r={r} />)}
+
+      {(adding || editing) && (
+        <RecipeForm initial={editing} onSave={save} onCancel={() => { setEditing(null); setAdding(false); }} />
+      )}
+
+      {viewing && !editing && (
+        <RecipeView recipe={viewing} onClose={() => setViewing(null)}
+          onEdit={(r) => { setEditing(r); }} onDelete={del} />
+      )}
+    </div>
+  );
+}

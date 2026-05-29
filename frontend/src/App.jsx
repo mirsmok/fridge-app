@@ -9,8 +9,12 @@ import Meters from './components/Meters.jsx';
 import Appliances from './components/Appliances.jsx';
 import Documents from './components/Documents.jsx';
 import Contacts from './components/Contacts.jsx';
+import Recognize from './components/Recognize.jsx';
+import Settings from './components/Settings.jsx';
+import Recipes from './components/Recipes.jsx';
+import { logDbg } from './lib/log.js';
 
-const VERSION = 'v2.13';
+const VERSION = 'v2.28';
 
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },
@@ -23,10 +27,13 @@ const MODULES = {
   appliances:{ label:'Urządzenia',icon:'🔧' },
   documents: { label:'Dokumenty', icon:'📄' },
   contacts:  { label:'Kontakty',  icon:'📞' },
+  recognize: { label:'Rozpoznaj', icon:'📸' },
+  recipes:   { label:'Przepisy',  icon:'📖' },
+  settings:  { label:'Ustawienia',icon:'⚙️' },
 };
 
 export default function App() {
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useState(() => localStorage.getItem('last_tab') || 'dashboard');
   const [menuOpen, setMenuOpen] = useState(false);
   const [alerts, setAlerts] = useState([]);
   const [products, setProducts] = useState([]);
@@ -37,12 +44,16 @@ export default function App() {
   const fetchShopping = () => fetch('/api/shopping').then(r=>r.json()).then(setShopping).catch(()=>{});
 
   useEffect(() => {
+    logDbg('App', `mount, version ${VERSION}, UA: ${navigator.userAgent.slice(0, 80)}`);
     fetchAlerts(); fetchProducts(); fetchShopping();
-    // Jeśli wracamy z pełnoekranowego skanera — przejdź od razu na Dodaj
-    if (localStorage.getItem('scanner_result')) setTab('add');
+    if (localStorage.getItem('scanner_result')) { localStorage.setItem('last_tab','add'); setTab('add'); }
   }, []);
 
-  const navigate = (module) => { setTab(module); setMenuOpen(false); };
+  const navigate = (module) => {
+    logDbg('App', `navigate to ${module}`);
+    localStorage.setItem('last_tab', module);
+    setTab(module); setMenuOpen(false);
+  };
 
   const addToShopping = async (product) => {
     await fetch('/api/shopping',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -77,12 +88,15 @@ export default function App() {
         {tab==='tasks'      && <Tasks />}
         {tab==='periodic'   && <PeriodicTasks />}
         {tab==='fridge'     && <ProductList products={products} onRefresh={fetchProducts} onAddToShopping={addToShopping} />}
-        {tab==='add'        && <AddProduct onAdded={()=>{ fetchProducts(); fetchAlerts(); setTab('fridge'); }} />}
+        {tab==='add'        && <AddProduct onAdded={()=>{ fetchProducts(); fetchAlerts(); navigate('fridge'); }} />}
         {tab==='shopping'   && <ShoppingList items={shopping} onRefresh={fetchShopping} />}
         {tab==='meters'     && <Meters />}
         {tab==='appliances' && <Appliances />}
         {tab==='documents'  && <Documents />}
         {tab==='contacts'   && <Contacts />}
+        {tab==='recognize'  && <Recognize onSaved={()=>{ fetchProducts(); fetchAlerts(); }} />}
+        {tab==='recipes'    && <Recipes />}
+        {tab==='settings'   && <Settings />}
       </main>
 
       <nav className="bottom-nav">
@@ -98,7 +112,7 @@ export default function App() {
             {key==='dashboard' && totalAlerts>0 && <span className="nav-badge">{totalAlerts}</span>}
           </button>
         ))}
-        <button className={['meters','appliances','documents','contacts','shopping','add'].includes(tab)?'active':''} onClick={()=>setMenuOpen(true)}>
+        <button className={['meters','appliances','documents','contacts','shopping','add','recognize','recipes','settings'].includes(tab)?'active':''} onClick={()=>setMenuOpen(true)}>
           <span>☰</span><span>Więcej</span>
           {shoppingPending>0 && <span className="nav-badge">{shoppingPending}</span>}
         </button>
@@ -115,10 +129,13 @@ export default function App() {
               {[
                 ['shopping','🛒','Zakupy',shoppingPending],
                 ['add','＋','Dodaj produkt',0],
+                ['recognize','📸','Rozpoznaj',0],
+                ['recipes','📖','Przepisy',0],
                 ['meters','📊','Liczniki',0],
                 ['appliances','🔧','Urządzenia',0],
                 ['documents','📄','Dokumenty',0],
                 ['contacts','📞','Kontakty',0],
+                ['settings','⚙️','Ustawienia',0],
               ].map(([key,icon,label,badge])=>(
                 <div key={key} className={`module-card ${tab===key?'active':''}`} onClick={()=>navigate(key)}>
                   <div style={{fontSize:'1.8rem',marginBottom:4}}>{icon}</div>
