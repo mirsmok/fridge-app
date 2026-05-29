@@ -5,6 +5,24 @@ export default function ShoppingList({ items, onRefresh, products = [] }) {
   const [newName, setNewName] = useState('');
   const [newQty, setNewQty] = useState(1);
   const [adding, setAdding] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copyList = async () => {
+    const text = items.filter(i => !i.checked)
+      .map(i => `${i.name} ${i.quantity} ${i.unit}`).join('\n');
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const toggle = async (item) => {
     await fetch(`/api/shopping/${item.id}`, {
@@ -71,9 +89,13 @@ export default function ShoppingList({ items, onRefresh, products = [] }) {
       </form>
 
       {items.length > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+          <button className="btn btn-ghost" style={{ fontSize: '0.72rem', padding: '5px 12px' }} onClick={copyList}
+            disabled={unchecked.length === 0}>
+            {copied ? '✅ Skopiowano!' : '📋 Kopiuj do schowka'}
+          </button>
           <button className="btn btn-danger" style={{ fontSize: '0.72rem', padding: '5px 12px' }} onClick={clearAll}>
-            🗑️ Wyczyść całą listę
+            🗑️ Wyczyść całość
           </button>
         </div>
       )}
