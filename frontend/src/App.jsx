@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Dashboard from './components/Dashboard.jsx';
 import Tasks from './components/Tasks.jsx';
 import PeriodicTasks from './components/PeriodicTasks.jsx';
@@ -14,7 +14,7 @@ import Settings from './components/Settings.jsx';
 import Recipes from './components/Recipes.jsx';
 import { logDbg } from './lib/log.js';
 
-const VERSION = 'v2.31';
+const VERSION = 'v2.36';
 
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },
@@ -38,6 +38,14 @@ export default function App() {
   const [alerts, setAlerts] = useState([]);
   const [products, setProducts] = useState([]);
   const [shopping, setShopping] = useState([]);
+  const [toast, setToast] = useState(null); // { msg, loading }
+  const toastTimer = useRef(null);
+
+  const showToast = (msg, loading = false) => {
+    clearTimeout(toastTimer.current);
+    setToast({ msg, loading });
+    if (!loading) toastTimer.current = setTimeout(() => setToast(null), 2500);
+  };
 
   const fetchAlerts = () => fetch('/api/alerts').then(r=>r.json()).then(setAlerts).catch(()=>{});
   const fetchProducts = () => fetch('/api/products').then(r=>r.json()).then(setProducts).catch(()=>{});
@@ -56,9 +64,11 @@ export default function App() {
   };
 
   const addToShopping = async (product) => {
+    showToast(`Dodaję „${product.name}”…`, true);
     await fetch('/api/shopping',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({barcode:product.barcode,name:product.name,unit:product.unit,source:'fridge'})});
     fetchShopping();
+    showToast(`Dodano „${product.name}” do zakupów`);
   };
 
   const shoppingPending = shopping.filter(i=>!i.checked).length;
@@ -145,6 +155,13 @@ export default function App() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="toast" style={{ background: toast.loading ? 'var(--accent)' : 'var(--ok)' }}>
+          {toast.loading ? <span className="spinner" /> : <span>✅</span>}
+          {toast.msg}
         </div>
       )}
     </div>

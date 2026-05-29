@@ -363,7 +363,14 @@ export default function Recipes({ onShoppingChanged }) {
   const [viewing, setViewing] = useState(null);
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('');
-  const [toast, setToast] = useState('');
+  const [toast, setToast] = useState(null); // { msg, loading }
+  const toastTimer = useRef(null);
+
+  const showToast = (msg, loading = false) => {
+    clearTimeout(toastTimer.current);
+    setToast({ msg, loading });
+    if (!loading) toastTimer.current = setTimeout(() => setToast(null), 3000);
+  };
 
   const load = () => fetch('/api/recipes').then(r => r.json()).then(setRecipes);
   useEffect(() => {
@@ -393,7 +400,8 @@ export default function Recipes({ onShoppingChanged }) {
   const addAllToShopping = async (r, e) => {
     e.stopPropagation();
     const lines = (r.ingredients || '').split('\n').map(l => l.trim()).filter(l => l && !l.endsWith(':'));
-    if (lines.length === 0) { setToast('Przepis nie ma składników'); setTimeout(() => setToast(''), 3000); return; }
+    if (lines.length === 0) { showToast('Przepis nie ma składników'); return; }
+    showToast(`Dodaję ${lines.length} składników…`, true);
     for (const name of lines) {
       await fetch('/api/shopping', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -401,8 +409,7 @@ export default function Recipes({ onShoppingChanged }) {
       });
     }
     onShoppingChanged?.();
-    setToast(`Dodano ${lines.length} ${lines.length === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
-    setTimeout(() => setToast(''), 3000);
+    showToast(`Dodano ${lines.length} ${lines.length === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
   };
 
   const filtered = recipes.filter(r => {
@@ -427,9 +434,26 @@ export default function Recipes({ onShoppingChanged }) {
             {r.servings && <span>🍽️ {r.servings}</span>}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-          <button className="btn btn-icon" onClick={(e) => toggleFav(r, e)}>{r.favourite ? '★' : '☆'}</button>
-          <button className="btn btn-icon" onClick={(e) => addAllToShopping(r, e)} title="Dodaj składniki do zakupów">🛒</button>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+          <button onClick={(e) => toggleFav(r, e)} title="Ulubiony"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+              fontSize: '1.3rem', lineHeight: 1, color: r.favourite ? 'var(--warn)' : 'var(--text2)',
+            }}>{r.favourite ? '★' : '☆'}</button>
+          <button onClick={(e) => addAllToShopping(r, e)} title="Dodaj składniki do zakupów"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 38, height: 38, borderRadius: '50%', border: 'none', cursor: 'pointer',
+              background: 'linear-gradient(135deg, var(--ok), #3a9b6e)',
+              boxShadow: '0 2px 6px rgba(76,175,130,0.4)',
+            }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+              stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="9" cy="21" r="1" fill="#000" />
+              <circle cx="20" cy="21" r="1" fill="#000" />
+              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -466,18 +490,14 @@ export default function Recipes({ onShoppingChanged }) {
           onEdit={(r) => { setEditing(r); }} onDelete={del}
           onShoppingAdded={(n) => {
             onShoppingChanged?.();
-            setToast(`Dodano ${n} ${n === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
-            setTimeout(() => setToast(''), 3000);
+            showToast(`Dodano ${n} ${n === 1 ? 'pozycję' : 'pozycji'} do zakupów`);
           }} />
       )}
 
       {toast && (
-        <div style={{
-          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--ok)', color: '#fff', padding: '10px 18px', borderRadius: 20,
-          fontSize: '0.85rem', fontWeight: 600, zIndex: 300, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        }}>
-          ✅ {toast}
+        <div className="toast" style={{ background: toast.loading ? 'var(--accent)' : 'var(--ok)' }}>
+          {toast.loading ? <span className="spinner" /> : <span>✅</span>}
+          {toast.msg}
         </div>
       )}
     </div>
