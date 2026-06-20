@@ -14,7 +14,7 @@ import Settings from './components/Settings.jsx';
 import Recipes from './components/Recipes.jsx';
 import { logDbg } from './lib/log.js';
 
-const VERSION = 'v2.37';
+const VERSION = 'v2.38';
 
 const MODULES = {
   dashboard: { label:'Dom',       icon:'🏠' },

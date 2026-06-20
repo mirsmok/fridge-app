@@ -16,15 +16,54 @@ function AiPanel({ onResult, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
+  const pickerOpen = useRef(false);
 
-  const addFiles = async (files) => {
-    setError('');
-    const arr = Array.from(files || []);
-    for (const f of arr) {
-      try { const d = await resizeImage(f); setImages(prev => [...prev, d]); }
-      catch (e) { setError(String(e.message || e)); }
-    }
-  };
+  useEffect(() => {
+    const el = fileRef.current;
+    if (!el) return;
+
+    const processFiles = async () => {
+      const files = el.files;
+      if (!files || !files.length) return;
+      setError('');
+      for (const f of Array.from(files)) {
+        try {
+          const d = await resizeImage(f);
+          setImages(prev => [...prev, d]);
+        } catch (e) {
+          setError(String(e.message || e));
+        }
+      }
+      el.value = '';
+    };
+
+    const onNativeChange = () => {
+      pickerOpen.current = false;
+      processFiles();
+    };
+
+    // fallback: HA app WebView nie odpala change — łapiemy powrót focusu/visibility
+    const onFocus = () => {
+      if (!pickerOpen.current) return;
+      pickerOpen.current = false;
+      setTimeout(processFiles, 300);
+    };
+    const onVisibility = () => {
+      if (!document.hidden && pickerOpen.current) {
+        pickerOpen.current = false;
+        setTimeout(processFiles, 300);
+      }
+    };
+
+    el.addEventListener('change', onNativeChange);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      el.removeEventListener('change', onNativeChange);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   const canAnalyze = images.length > 0 || url.trim() || desc.trim();
 
@@ -62,9 +101,9 @@ function AiPanel({ onResult, onClose }) {
 
       <div style={{ fontSize: '0.72rem', color: 'var(--text2)', textAlign: 'center', margin: '6px 0' }}>— lub —</div>
 
-      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
-        onChange={e => addFiles(e.target.files)} />
-      <button className="btn btn-ghost" style={{ width: '100%', marginBottom: 8 }} onClick={() => fileRef.current?.click()}>
+      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} />
+      <button className="btn btn-ghost" style={{ width: '100%', marginBottom: 8 }}
+        onClick={() => { pickerOpen.current = true; fileRef.current?.click(); }}>
         📸 Dodaj zdjęcia ({images.length})
       </button>
 
